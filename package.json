@@ -1,0 +1,15 @@
+{
+  "name": "reddit-scroll-limiter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Manifest V3 Chromium extension that limits Reddit scrolling.",
+  "scripts": {
+    "build:dist": "node scripts/build-dist.js",
+    "test:static": "node --check background.js && node --check popup/popup.js && node --check content-scripts/reddit-limiter.js",
+    "test:runtime": "node scripts/runtime-smoke-test.js",
+    "test:ui": "node scripts/ui-smoke-test.js",
+    "test:live": "node scripts/live-reddit-test.js",
+    "test:release": "npm run build:dist && node scripts/release-readiness-test.js",
+    "test:all": "npm run test:static && npm run test:runtime && npm run test:ui && npm run test:live && npm run test:release"
+  }
+}

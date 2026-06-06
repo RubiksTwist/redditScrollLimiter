@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reddit Scroll Limiter</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup-shell">
+    <header class="popup-header">
+      <div class="brand-mark" aria-hidden="true">R</div>
+      <div>
+        <h1>Reddit Scroll Limiter</h1>
+      </div>
+    </header>
+
+    <section class="status-panel" aria-labelledby="status-heading">
+      <h2 id="status-heading">Status</h2>
+      <p id="routeStatus">Limiter active on Reddit</p>
+      <p id="breakStatus" hidden></p>
+      <p id="snoozeStatus" hidden></p>
+    </section>
+
+    <section class="setting-panel" aria-labelledby="limit-heading">
+      <div class="setting-row">
+        <label id="limit-heading" for="postLimit">Post limit</label>
+        <output id="valueDisplay" for="postLimit postLimitSlider">100</output>
+      </div>
+
+      <div class="limit-controls">
+        <input type="number" id="postLimit" min="1" max="500" value="100" inputmode="numeric">
+        <input type="range" id="postLimitSlider" min="1" max="500" value="100">
+      </div>
+
+      <p class="hint">The blocker appears after this many posts have been at least halfway visible.</p>
+    </section>
+
+    <section class="setting-panel" aria-labelledby="break-heading">
+      <h2 id="break-heading">Break settings</h2>
+
+      <label class="field">
+        <span>Limit by</span>
+        <select id="limitMode">
+          <option value="posts">Posts</option>
+          <option value="time">Time</option>
+          <option value="both">Posts or time</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Time limit</span>
+        <select id="timeLimitMinutes">
+          <option value="10">10 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="45">45 minutes</option>
+          <option value="60">1 hour</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Break length</span>
+        <select id="lockoutMinutes">
+          <option value="5">5 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="60">1 hour</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Reset session after</span>
+        <select id="resetAfterMinutes">
+          <option value="10">10 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="60">1 hour</option>
+          <option value="120">2 hours</option>
+          <option value="0">Never</option>
+        </select>
+      </label>
+
+      <label class="toggle secondary-toggle">
+        <input type="checkbox" id="pauseTimerWhenTabHidden" checked>
+        <span>Pause timer when tab is hidden</span>
+      </label>
+    </section>
+
+    <section class="setting-panel" aria-labelledby="subreddit-heading">
+      <h2 id="subreddit-heading">Feed rules</h2>
+
+      <label class="field">
+        <span>Apply limiter to</span>
+        <select id="subredditMode">
+          <option value="all">Limit all Reddit feeds</option>
+          <option value="only_listed">Only limit listed feeds</option>
+          <option value="exclude_listed">Do not limit listed feeds</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Listed feeds</span>
+        <input type="text" id="subredditList" placeholder="popular, all, askreddit, home, search">
+      </label>
+
+      <p class="hint">Use names like popular or askreddit. Do not include r/.</p>
+    </section>
+
+    <section class="setting-panel" aria-labelledby="warning-heading">
+      <h2 id="warning-heading">Warning</h2>
+
+      <label class="toggle">
+        <input type="checkbox" id="warningEnabled" checked>
+        <span>Warn before lockout</span>
+      </label>
+
+      <label class="field warning-threshold">
+        <span>Warning threshold</span>
+        <select id="warningThresholdPercent">
+          <option value="70">70%</option>
+          <option value="80">80%</option>
+          <option value="90">90%</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="setting-panel" aria-labelledby="snooze-heading">
+      <h2 id="snooze-heading">Snooze</h2>
+
+      <label class="toggle">
+        <input type="checkbox" id="snoozeEnabled" checked>
+        <span>Allow snooze</span>
+      </label>
+
+      <div id="snoozeControls" class="snooze-controls">
+        <label class="field">
+          <span>Snooze length</span>
+          <select id="snoozeMinutes">
+            <option value="5">5 minutes</option>
+            <option value="10">10 minutes</option>
+            <option value="15">15 minutes</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Snoozes per session</span>
+          <select id="snoozeLimitPerSession">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="setting-panel compact">
+      <label class="toggle">
+        <input type="checkbox" id="enabled" checked>
+        <span>Extension enabled</span>
+      </label>
+    </section>
+
+    <button id="startBreakBtn" type="button" class="primary-button">Start break now</button>
+    <button id="disableHourBtn" type="button">Disable for 1 hour</button>
+    <button id="disableSessionBtn" type="button">Disable until next session</button>
+    <button id="disableFeedBtn" type="button">Disable this feed until next session</button>
+    <button id="resetBtn" type="button">Reset to 100</button>
+
+    <p class="install-note">Refresh open Reddit tabs after installing or updating.</p>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>
