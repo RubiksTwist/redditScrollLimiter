@@ -43,7 +43,7 @@ async function main() {
         "popup reset interaction keeps inputs synchronized",
         "blocker overlay covers viewport and focuses primary action",
         "blocker clears the warning toast",
-        "hide message plus downward scroll restores blocker",
+        "escape and scroll cannot hide blocker",
         "back-to-viewed-posts button clears blocked state"
       ]
     }, null, 2));
@@ -81,6 +81,7 @@ async function testPopupUi(extensionId) {
       "postLimitSlider",
       "enabled",
       "resetBtn",
+      "applyBtn",
       "status",
       "lockoutMinutes",
       "resetAfterMinutes",
@@ -92,13 +93,10 @@ async function testPopupUi(extensionId) {
       "warningEnabled",
       "warningThresholdPercent",
       "snoozeEnabled",
+      "snoozePostCount",
       "snoozeMinutes",
       "snoozeLimitPerSession",
-      "startBreakBtn",
-      "disableHourBtn",
-      "disableSessionBtn",
-      "disableFeedBtn",
-      "routeStatus"
+      "sessionStatusPanel"
     ];
     const elements = Object.fromEntries(ids.map((id) => [id, Boolean(document.getElementById(id))]));
     return {
@@ -120,11 +118,23 @@ async function testPopupUi(extensionId) {
       warningEnabled: document.getElementById("warningEnabled")?.checked,
       warningThresholdPercent: document.getElementById("warningThresholdPercent")?.value,
       snoozeEnabled: document.getElementById("snoozeEnabled")?.checked,
+      snoozePostCount: document.getElementById("snoozePostCount")?.value,
       snoozeMinutes: document.getElementById("snoozeMinutes")?.value,
       snoozeLimitPerSession: document.getElementById("snoozeLimitPerSession")?.value,
       resetText: document.getElementById("resetBtn")?.textContent || "",
-      startBreakText: document.getElementById("startBreakBtn")?.textContent || "",
-      routeStatus: document.getElementById("routeStatus")?.textContent || ""
+      applyText: document.getElementById("applyBtn")?.textContent || "",
+      manualButtonsPresent: [
+        "startBreakBtn",
+        "disableHourBtn",
+        "disableSessionBtn",
+        "disableFeedBtn"
+      ].some((id) => Boolean(document.getElementById(id))),
+      postLimitPanelHidden: document.getElementById("postLimitPanel")?.hidden,
+      timeLimitFieldHidden: document.getElementById("timeLimitField")?.hidden,
+      pauseTimerFieldHidden: document.getElementById("pauseTimerField")?.hidden,
+      snoozePostsFieldHidden: document.getElementById("snoozePostsField")?.hidden,
+      snoozeMinutesFieldHidden: document.getElementById("snoozeMinutesField")?.hidden,
+      sessionStatusPanelHidden: document.getElementById("sessionStatusPanel")?.hidden
     };
   })()`);
 
@@ -144,16 +154,24 @@ async function testPopupUi(extensionId) {
   assert(initial.warningEnabled === true, "Popup warning toggle did not default to true.");
   assert(initial.warningThresholdPercent === "80", "Popup warning threshold did not default to 80.");
   assert(initial.snoozeEnabled === true, "Popup snooze toggle did not default to true.");
+  assert(initial.snoozePostCount === "5", "Popup snooze post count did not default to 5.");
   assert(initial.snoozeMinutes === "5", "Popup snooze length did not default to 5.");
   assert(initial.snoozeLimitPerSession === "1", "Popup snooze limit did not default to 1.");
-  assert(initial.resetText === "Reset to 100", "Popup reset button text changed unexpectedly.");
-  assert(initial.startBreakText === "Start break now", "Popup start-break button is missing.");
-  assert(initial.routeStatus.includes("Limiter active on"), "Popup reliable route status is missing.");
+  assert(initial.resetText === "Reset session", "Popup reset button text changed unexpectedly.");
+  assert(initial.applyText === "Apply and refresh Reddit tabs", "Popup apply button text changed unexpectedly.");
+  assert(initial.manualButtonsPresent === false, "Popup still renders manual break/disable buttons.");
+  assert(initial.postLimitPanelHidden === false, "Post limit controls should be visible in posts mode.");
+  assert(initial.timeLimitFieldHidden === true, "Time limit controls should be hidden in posts mode.");
+  assert(initial.pauseTimerFieldHidden === true, "Pause-timer controls should be hidden in posts mode.");
+  assert(initial.snoozePostsFieldHidden === false, "Post snooze controls should be visible in posts mode.");
+  assert(initial.snoozeMinutesFieldHidden === true, "Minute snooze controls should be hidden in posts mode.");
+  assert(initial.sessionStatusPanelHidden === true, "Session status should be hidden when there is no active break or snooze.");
 
   await page.evaluate(`new Promise((resolve) => {
     chrome.storage.local.set({
       redditScrollLimiterState: {
         globalLockedUntil: Date.now() + 30 * 60000,
+        disabledRouteKeys: ["subreddit:popular"],
         lastKnownRoute: {
           key: "subreddit:popular",
           label: "r/popular",
@@ -168,6 +186,7 @@ async function testPopupUi(extensionId) {
             lastActivityAt: Date.now(),
             activeSeconds: 0,
             snoozedUntil: Date.now() + 5 * 60000,
+            postSnoozeAllowance: 5,
             snoozesUsed: 1
           }
         }
@@ -177,31 +196,24 @@ async function testPopupUi(extensionId) {
   await sleep(500);
 
   const seededStatus = await page.evaluate(`(() => ({
-    route: document.getElementById("routeStatus")?.textContent || "",
+    panelHidden: document.getElementById("sessionStatusPanel")?.hidden,
     breakText: document.getElementById("breakStatus")?.textContent || "",
     snoozeText: document.getElementById("snoozeStatus")?.textContent || ""
   }))()`);
 
-  assert(seededStatus.route === "Limiter active on r/popular", "Popup did not render seeded route status.");
+  assert(seededStatus.panelHidden === false, "Popup did not reveal session status for an active break/snooze.");
   assert(seededStatus.breakText.includes("Break active until"), "Popup did not render seeded break status.");
   assert(seededStatus.snoozeText.includes("Snoozed until"), "Popup did not render seeded snooze status.");
 
-  await page.evaluate(`document.getElementById("startBreakBtn").click()`);
-  await sleep(500);
-
-  const manualBreak = await page.evaluate(`new Promise((resolve) => {
-    chrome.storage.local.get(["redditScrollLimiterState"], (items) => {
-      resolve(items.redditScrollLimiterState?.globalLockedUntil || 0);
-    });
-  })`);
-
-  assert(manualBreak > Date.now(), "Start break button did not write a future global lockout.");
-
   await page.evaluate(`(() => {
-    document.getElementById("limitMode").value = "both";
+    document.getElementById("limitMode").value = "time";
     document.getElementById("limitMode").dispatchEvent(new Event("change", { bubbles: true }));
     document.getElementById("timeLimitMinutes").value = "45";
     document.getElementById("timeLimitMinutes").dispatchEvent(new Event("change", { bubbles: true }));
+    document.getElementById("snoozePostCount").value = "10";
+    document.getElementById("snoozePostCount").dispatchEvent(new Event("change", { bubbles: true }));
+    document.getElementById("snoozeMinutes").value = "10";
+    document.getElementById("snoozeMinutes").dispatchEvent(new Event("change", { bubbles: true }));
     document.getElementById("pauseTimerWhenTabHidden").checked = false;
     document.getElementById("pauseTimerWhenTabHidden").dispatchEvent(new Event("change", { bubbles: true }));
     document.getElementById("subredditMode").value = "only_listed";
@@ -218,6 +230,8 @@ async function testPopupUi(extensionId) {
     chrome.storage.sync.get([
       "limitMode",
       "timeLimitMinutes",
+      "snoozePostCount",
+      "snoozeMinutes",
       "pauseTimerWhenTabHidden",
       "subredditMode",
       "subredditAllowlist",
@@ -226,8 +240,10 @@ async function testPopupUi(extensionId) {
     ], resolve);
   })`);
 
-  assert(storedNewControls.limitMode === "both", "Limit mode control did not persist.");
+  assert(storedNewControls.limitMode === "time", "Limit mode control did not persist.");
   assert(storedNewControls.timeLimitMinutes === 45, "Time limit control did not persist.");
+  assert(storedNewControls.snoozePostCount === 10, "Snooze post count control did not persist.");
+  assert(storedNewControls.snoozeMinutes === 10, "Snooze minute control did not persist.");
   assert(storedNewControls.pauseTimerWhenTabHidden === false, "Pause-timer toggle did not persist.");
   assert(storedNewControls.subredditMode === "only_listed", "Subreddit mode did not persist.");
   assert(
@@ -237,51 +253,76 @@ async function testPopupUi(extensionId) {
   assert(storedNewControls.warningEnabled === false, "Warning toggle did not persist.");
   assert(storedNewControls.warningThresholdPercent === 90, "Warning threshold did not persist.");
 
-  await page.evaluate(`document.getElementById("disableHourBtn").click()`);
-  await sleep(300);
-  const disabledHour = await page.evaluate(`new Promise((resolve) => {
-    chrome.storage.local.get(["redditScrollLimiterState"], (items) => {
-      resolve(items.redditScrollLimiterState?.disabledUntil || 0);
-    });
-  })`);
-  assert(disabledHour > Date.now(), "Disable for 1 hour did not write disabledUntil.");
+  await page.evaluate(`(() => {
+    document.getElementById("subredditMode").value = "exclude_listed";
+    document.getElementById("subredditList").value = "popular";
+    document.getElementById("subredditList").dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+  await sleep(700);
 
-  await page.evaluate(`document.getElementById("disableSessionBtn").click()`);
-  await sleep(300);
-  const disabledSession = await page.evaluate(`new Promise((resolve) => {
-    chrome.storage.local.get(["redditScrollLimiterState"], (items) => {
-      resolve(items.redditScrollLimiterState?.disabledUntilSessionReset === true);
+  const excludedRuleStatus = await page.evaluate(`new Promise((resolve) => {
+    chrome.storage.sync.get(["subredditMode", "subredditBlocklist"], (stored) => {
+      resolve({
+        mode: stored.subredditMode,
+        blocklist: stored.subredditBlocklist || [],
+        panelHidden: document.getElementById("sessionStatusPanel")?.hidden
+      });
     });
   })`);
-  assert(disabledSession, "Disable until next session did not write disabledUntilSessionReset.");
 
-  await page.evaluate(`document.getElementById("disableFeedBtn").click()`);
+  assert(excludedRuleStatus.mode === "exclude_listed", "Exclude-listed mode did not persist.");
+  assert(JSON.stringify(excludedRuleStatus.blocklist) === JSON.stringify(["popular"]), "Exclude-listed blocklist did not persist.");
+  assert(excludedRuleStatus.panelHidden === false, "Changing feed rules should not hide an active session status.");
+
+  const timeVisibility = await page.evaluate(`(() => ({
+    postLimitPanelHidden: document.getElementById("postLimitPanel").hidden,
+    timeLimitFieldHidden: document.getElementById("timeLimitField").hidden,
+    pauseTimerFieldHidden: document.getElementById("pauseTimerField").hidden,
+    snoozePostsFieldHidden: document.getElementById("snoozePostsField").hidden,
+    snoozeMinutesFieldHidden: document.getElementById("snoozeMinutesField").hidden
+  }))()`);
+  assert(timeVisibility.postLimitPanelHidden === true, "Post limit controls should be hidden in time mode.");
+  assert(timeVisibility.timeLimitFieldHidden === false, "Time limit controls should be visible in time mode.");
+  assert(timeVisibility.pauseTimerFieldHidden === false, "Pause-timer controls should be visible in time mode.");
+  assert(timeVisibility.snoozePostsFieldHidden === true, "Post snooze controls should be hidden in time mode.");
+  assert(timeVisibility.snoozeMinutesFieldHidden === false, "Minute snooze controls should be visible in time mode.");
+
+  await page.evaluate(`(() => {
+    document.getElementById("limitMode").value = "posts";
+    document.getElementById("limitMode").dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
   await sleep(300);
-  const disabledFeed = await page.evaluate(`new Promise((resolve) => {
-    chrome.storage.local.get(["redditScrollLimiterState"], (items) => {
-      resolve(items.redditScrollLimiterState?.disabledRouteKeys || []);
-    });
-  })`);
-  assert(disabledFeed.includes("subreddit:popular"), "Disable this feed did not persist the last known route key.");
 
   await page.evaluate(`(() => {
     const input = document.getElementById("postLimit");
-    input.value = "777";
+    input.value = "10";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     document.getElementById("resetBtn").click();
   })()`);
   await sleep(700);
 
-  const afterReset = await page.evaluate(`(() => ({
-    limit: document.getElementById("postLimit").value,
-    slider: document.getElementById("postLimitSlider").value,
-    display: document.getElementById("valueDisplay").textContent
-  }))()`);
+  const afterReset = await page.evaluate(`new Promise((resolve) => {
+    chrome.storage.local.get(["redditScrollLimiterState"], (items) => {
+      const state = items.redditScrollLimiterState || {};
+      resolve({
+        limit: document.getElementById("postLimit").value,
+        slider: document.getElementById("postLimitSlider").value,
+        display: document.getElementById("valueDisplay").textContent,
+        globalLockedUntil: state.globalLockedUntil || null,
+        disabledRouteKeys: state.disabledRouteKeys || [],
+        routeSession: state.routes?.["subreddit:popular"] || {}
+      });
+    });
+  })`);
 
-  assert(afterReset.limit === "100", "Reset did not restore numeric input to 100.");
-  assert(afterReset.slider === "100", "Reset did not restore slider to 100.");
-  assert(afterReset.display === "100", "Reset did not restore display output to 100.");
+  assert(afterReset.limit === "10", "Session reset should not change the numeric post limit.");
+  assert(afterReset.slider === "10", "Session reset should not change the slider post limit.");
+  assert(afterReset.display === "10", "Session reset should not change the display output.");
+  assert(afterReset.globalLockedUntil === null, "Session reset did not clear active break lockout.");
+  assert(!afterReset.disabledRouteKeys.includes("subreddit:popular"), "Session reset did not clear the current feed disable.");
+  assert(Array.isArray(afterReset.routeSession.seenPostIds) && afterReset.routeSession.seenPostIds.length === 0, "Session reset did not clear viewed posts.");
+  assert(afterReset.routeSession.postSnoozeAllowance === 0, "Session reset did not clear post snooze allowance.");
 
   const screenshot = path.join(ARTIFACTS_DIR, "popup-ui.png");
   await captureScreenshot(page, screenshot);
@@ -308,6 +349,7 @@ async function setExtensionStorage(extensionId, postLimit) {
       lockoutMinutes: 30,
       snoozeEnabled: true,
       snoozeMinutes: 5,
+      snoozePostCount: 5,
       snoozeLimitPerSession: 1,
       showCountdown: true,
       limitMode: "posts",
@@ -330,6 +372,7 @@ async function setExtensionStorage(extensionId, postLimit) {
       "lockoutMinutes",
       "resetAfterMinutes",
       "snoozeEnabled",
+      "snoozePostCount",
       "limitMode",
       "timeLimitMinutes",
       "pauseTimerWhenTabHidden",
@@ -345,6 +388,7 @@ async function setExtensionStorage(extensionId, postLimit) {
   assert(stored.lockoutMinutes === 30, "Storage setup failed: expected lockoutMinutes 30.");
   assert(stored.resetAfterMinutes === 30, "Storage setup failed: expected resetAfterMinutes 30.");
   assert(stored.snoozeEnabled === true, "Storage setup failed: expected snoozeEnabled true.");
+  assert(stored.snoozePostCount === 5, "Storage setup failed: expected snoozePostCount 5.");
   assert(stored.limitMode === "posts", "Storage setup failed: expected limitMode posts.");
   assert(stored.timeLimitMinutes === 30, "Storage setup failed: expected timeLimitMinutes 30.");
   assert(stored.pauseTimerWhenTabHidden === true, "Storage setup failed: expected pauseTimerWhenTabHidden true.");
@@ -386,6 +430,9 @@ async function testBlockerUi() {
       warningPresent: Boolean(document.getElementById("reddit-scroll-limiter-warning")),
       text: overlay?.innerText || "",
       blocked: document.body.classList.contains("reddit-scroll-limiter-blocked"),
+      htmlBlocked: document.documentElement.classList.contains("reddit-scroll-limiter-blocked"),
+      bodyOverflow: getComputedStyle(document.body).overflow,
+      htmlOverflow: getComputedStyle(document.documentElement).overflow,
       activeText: document.activeElement?.textContent || "",
       viewport: {
         width: document.documentElement.clientWidth,
@@ -408,6 +455,9 @@ async function testBlockerUi() {
   assert(overlay.present, "Blocker overlay did not appear.");
   assert(!overlay.warningPresent, "Warning toast remained visible after blocker appeared.");
   assert(overlay.blocked, "Blocker body class was not applied.");
+  assert(overlay.htmlBlocked, "Blocker html class was not applied.");
+  assert(overlay.bodyOverflow === "hidden", `Body scroll was not locked: ${overlay.bodyOverflow}.`);
+  assert(overlay.htmlOverflow === "hidden", `Document scroll was not locked: ${overlay.htmlOverflow}.`);
   assert(overlay.text.includes("Time for a break"), "Blocker title is missing.");
   assert(overlay.text.includes("You have scrolled through 100 posts"), "Blocker count text is missing.");
   assert(overlay.text.includes("Reddit scrolling is paused until"), "Blocker countdown text is missing.");
@@ -418,8 +468,8 @@ async function testBlockerUi() {
   assert(overlay.dialogRect.width <= 440, "Blocker dialog is wider than intended.");
   assert(
     overlay.buttons.includes("Back to viewed posts") &&
-    overlay.buttons.includes("Snooze 5 minutes") &&
-    overlay.buttons.includes("Hide message"),
+    overlay.buttons.includes("Snooze 5 posts") &&
+    !overlay.buttons.includes("Hide message"),
     "Blocker actions are missing."
   );
 
@@ -435,7 +485,7 @@ async function testBlockerUi() {
   await sleep(250);
 
   const hidden = await page.evaluate(`Boolean(document.getElementById("reddit-scroll-limiter-overlay")?.hidden)`);
-  assert(hidden, "Escape did not hide the blocker message.");
+  assert(!hidden, "Escape should not hide the blocker message.");
 
   await page.send("Input.dispatchMouseEvent", {
     type: "mouseWheel",
@@ -450,7 +500,7 @@ async function testBlockerUi() {
     const overlay = document.getElementById("reddit-scroll-limiter-overlay");
     return Boolean(overlay) && !overlay.hidden;
   })()`);
-  assert(restored, "Downward scroll did not restore blocker message after Escape.");
+  assert(restored, "Blocker message disappeared after scroll.");
 
   await page.evaluate(`document.querySelector("#reddit-scroll-limiter-overlay button").click()`);
   await sleep(1200);
@@ -458,11 +508,14 @@ async function testBlockerUi() {
   const cleared = await page.evaluate(`(() => ({
     overlayPresent: Boolean(document.getElementById("reddit-scroll-limiter-overlay")),
     blocked: document.body.classList.contains("reddit-scroll-limiter-blocked"),
+    htmlBlocked: document.documentElement.classList.contains("reddit-scroll-limiter-blocked"),
     scrollY: window.scrollY
   }))()`);
 
   assert(!cleared.overlayPresent, "Return button did not clear overlay.");
   assert(!cleared.blocked, "Return button did not clear blocked state.");
+  assert(!cleared.htmlBlocked, "Return button did not clear html blocked state.");
+  assert(cleared.scrollY < 25600, `Return button did not move back up the feed: ${cleared.scrollY}.`);
 
   page.close();
   return { screenshot };

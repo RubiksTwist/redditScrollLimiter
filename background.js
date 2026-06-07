@@ -5,6 +5,7 @@ const DEFAULT_SETTINGS = {
   lockoutMinutes: 30,
   snoozeEnabled: true,
   snoozeMinutes: 5,
+  snoozePostCount: 5,
   snoozeLimitPerSession: 1,
   showCountdown: true,
   limitMode: "posts",

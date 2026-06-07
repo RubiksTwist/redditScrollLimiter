@@ -14,6 +14,8 @@ main().catch((error) => {
 });
 
 async function main() {
+  testRouteRuleMatching();
+
   const browserPath = resolveBrowserPath();
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "rsl-runtime-smoke-"));
   const browser = launchBrowser(browserPath, profileDir);
@@ -34,6 +36,7 @@ async function main() {
       checks: [
         "extension service worker loaded",
         "content script initialized on www.reddit.com",
+        "feed include/exclude route rules matched popular, home, and specific subreddits",
         "settings and local route state round-tripped",
         "popup loaded without inline-script CSP failure"
       ]
@@ -45,6 +48,83 @@ async function main() {
       fs.rmSync(profileDir, { recursive: true, force: true });
     } catch {}
   }
+}
+
+function testRouteRuleMatching() {
+  const contentScriptPath = path.join(EXTENSION_ROOT, "content-scripts", "reddit-limiter.js");
+  const source = fs.readFileSync(contentScriptPath, "utf8");
+  const bootstrapPattern = /\s+getSettingsAndState\(\(settings, state\) => \{\s+const limiter = new RedditScrollLimiter\(settings, state\);\s+limiter\.init\(\);\s+\}\);/;
+  const testSource = source.replace(
+    bootstrapPattern,
+    "\n  window.__RSL_TEST_EXPORTS__ = { RedditScrollLimiter, getRouteInfo, getRouteRuleNames, normalizeSettings };"
+  );
+
+  assert(testSource !== source, "Could not prepare content-script route-rule test hooks.");
+
+  const context = {
+    window: {
+      location: {
+        href: "https://www.reddit.com/",
+        pathname: "/"
+      },
+      scrollY: 0,
+      addEventListener() {}
+    },
+    document: {
+      addEventListener() {},
+      documentElement: { classList: { add() {}, remove() {} } },
+      body: { classList: { add() {}, remove() {} } }
+    },
+    console,
+    Date,
+    IntersectionObserver: function IntersectionObserver() {},
+    MutationObserver: function MutationObserver() {}
+  };
+
+  require("node:vm").runInNewContext(testSource, context, {
+    filename: contentScriptPath
+  });
+
+  const { RedditScrollLimiter, getRouteInfo, getRouteRuleNames } = context.window.__RSL_TEST_EXPORTS__;
+  assert(typeof RedditScrollLimiter === "function", "Route-rule test hooks did not load limiter class.");
+
+  const routeNames = (pathname) => getRouteRuleNames(getRouteInfo(pathname));
+  assert(JSON.stringify(routeNames("/popular")) === JSON.stringify(["popular"]), "Popular route should only match popular.");
+  assert(routeNames("/").includes("home") && !routeNames("/").includes("popular"), "Home route should not be treated as popular.");
+  assert(JSON.stringify(routeNames("/r/technology")) === JSON.stringify(["technology"]), "Subreddit route should match only its subreddit name.");
+
+  const isLimited = (pathname, settings) => {
+    context.window.location.pathname = pathname;
+    context.window.location.href = `https://www.reddit.com${pathname}`;
+    const limiter = new RedditScrollLimiter(settings, {});
+    limiter.currentRoute = getRouteInfo(pathname);
+    return limiter.isCurrentRouteLimited();
+  };
+
+  assert(isLimited("/popular", {
+    subredditMode: "only_listed",
+    subredditAllowlist: ["popular"]
+  }) === true, "Only-listed popular should limit /popular.");
+  assert(isLimited("/", {
+    subredditMode: "only_listed",
+    subredditAllowlist: ["popular"]
+  }) === false, "Only-listed popular should not limit home.");
+  assert(isLimited("/r/mycommunity", {
+    subredditMode: "only_listed",
+    subredditAllowlist: ["popular"]
+  }) === false, "Only-listed popular should not limit an unrelated subreddit.");
+  assert(isLimited("/r/technology", {
+    subredditMode: "only_listed",
+    subredditAllowlist: ["technology"]
+  }) === true, "Only-listed technology should limit r/technology.");
+  assert(isLimited("/r/technology", {
+    subredditMode: "exclude_listed",
+    subredditBlocklist: ["technology"]
+  }) === false, "Excluded technology should not limit r/technology.");
+  assert(isLimited("/popular", {
+    subredditMode: "exclude_listed",
+    subredditBlocklist: ["technology"]
+  }) === true, "Excluded technology should still limit /popular.");
 }
 
 function resolveBrowserPath() {
@@ -162,6 +242,7 @@ async function runPopupSmoke(extensionId) {
     warningEnabled: document.getElementById("warningEnabled")?.checked,
     warningThresholdPercent: document.getElementById("warningThresholdPercent")?.value,
     snoozeEnabled: document.getElementById("snoozeEnabled")?.checked,
+    snoozePostCount: document.getElementById("snoozePostCount")?.value,
     snoozeMinutes: document.getElementById("snoozeMinutes")?.value,
     snoozeLimitPerSession: document.getElementById("snoozeLimitPerSession")?.value,
     inlineScripts: document.querySelectorAll("script:not([src])").length,
@@ -186,6 +267,7 @@ async function runPopupSmoke(extensionId) {
   assert(result.warningEnabled === true, "Expected warning toggle to default true.");
   assert(result.warningThresholdPercent === "80", `Expected warning threshold 80, got ${result.warningThresholdPercent}.`);
   assert(result.snoozeEnabled === true, "Expected snooze toggle to default to true.");
+  assert(result.snoozePostCount === "5", `Expected default snooze post count 5, got ${result.snoozePostCount}.`);
   assert(result.snoozeMinutes === "5", `Expected default snooze minutes 5, got ${result.snoozeMinutes}.`);
   assert(result.snoozeLimitPerSession === "1", `Expected default snooze limit 1, got ${result.snoozeLimitPerSession}.`);
   assert(result.inlineScripts === 0, "Popup contains inline scripts.");
@@ -211,6 +293,7 @@ async function setExtensionStorage(extensionId, postLimit) {
       lockoutMinutes: 30,
       snoozeEnabled: true,
       snoozeMinutes: 5,
+      snoozePostCount: 5,
       snoozeLimitPerSession: 1,
       showCountdown: true,
       limitMode: "posts",
@@ -233,6 +316,7 @@ async function setExtensionStorage(extensionId, postLimit) {
       "resetAfterMinutes",
       "lockoutMinutes",
       "snoozeEnabled",
+      "snoozePostCount",
       "limitMode",
       "timeLimitMinutes",
       "pauseTimerWhenTabHidden",
@@ -248,6 +332,7 @@ async function setExtensionStorage(extensionId, postLimit) {
   assert(stored.resetAfterMinutes === 30, "Storage setup failed: expected resetAfterMinutes 30.");
   assert(stored.lockoutMinutes === 30, "Storage setup failed: expected lockoutMinutes 30.");
   assert(stored.snoozeEnabled === true, "Storage setup failed: expected snoozeEnabled true.");
+  assert(stored.snoozePostCount === 5, "Storage setup failed: expected snoozePostCount 5.");
   assert(stored.limitMode === "posts", "Storage setup failed: expected limitMode posts.");
   assert(stored.timeLimitMinutes === 30, "Storage setup failed: expected timeLimitMinutes 30.");
   assert(stored.pauseTimerWhenTabHidden === true, "Storage setup failed: expected pauseTimerWhenTabHidden true.");

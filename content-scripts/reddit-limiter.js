@@ -6,6 +6,7 @@
     lockoutMinutes: 30,
     snoozeEnabled: true,
     snoozeMinutes: 5,
+    snoozePostCount: 5,
     snoozeLimitPerSession: 1,
     showCountdown: true,
     limitMode: "posts",
@@ -138,6 +139,7 @@
       this.removeWarning();
       this.removeFeedCard();
       this.removeOverlay();
+      document.documentElement.classList.remove("reddit-scroll-limiter-blocked");
       document.body.classList.remove("reddit-scroll-limiter-blocked");
       this.scheduleStateSave();
     }
@@ -156,6 +158,7 @@
       this.removeWarning();
       this.removeFeedCard();
       this.removeOverlay();
+      document.documentElement.classList.remove("reddit-scroll-limiter-blocked");
       document.body.classList.remove("reddit-scroll-limiter-blocked");
       this.persistLastKnownRoute();
     }
@@ -249,6 +252,7 @@
           lockoutMinutes: changes.lockoutMinutes ? changes.lockoutMinutes.newValue : this.settings.lockoutMinutes,
           snoozeEnabled: changes.snoozeEnabled ? changes.snoozeEnabled.newValue : this.settings.snoozeEnabled,
           snoozeMinutes: changes.snoozeMinutes ? changes.snoozeMinutes.newValue : this.settings.snoozeMinutes,
+          snoozePostCount: changes.snoozePostCount ? changes.snoozePostCount.newValue : this.settings.snoozePostCount,
           snoozeLimitPerSession: changes.snoozeLimitPerSession ? changes.snoozeLimitPerSession.newValue : this.settings.snoozeLimitPerSession,
           showCountdown: changes.showCountdown ? changes.showCountdown.newValue : this.settings.showCountdown,
           limitMode: changes.limitMode ? changes.limitMode.newValue : this.settings.limitMode,
@@ -338,7 +342,7 @@
           this.recordFeedCardAnchor(entry.target, postId);
           changed = true;
 
-          if (this.seenPostIds.size >= this.settings.postLimit) {
+          if (this.seenPostIds.size >= this.getEffectivePostLimit()) {
             break;
           }
         }
@@ -412,10 +416,9 @@
       this.lockSuppressedAboveLimit = false;
       this.overlayHiddenByEscape = false;
       this.stopActiveTimeTracking();
+      document.documentElement.classList.add("reddit-scroll-limiter-blocked");
       document.body.classList.add("reddit-scroll-limiter-blocked");
-      if (!this.tryShowFeedCard(reason)) {
-        this.showOverlay(reason);
-      }
+      this.showOverlay(reason);
       this.startCountdown();
     }
 
@@ -426,6 +429,7 @@
       this.stopCountdown();
       this.removeFeedCard();
       this.removeOverlay();
+      document.documentElement.classList.remove("reddit-scroll-limiter-blocked");
       document.body.classList.remove("reddit-scroll-limiter-blocked");
       this.startActiveTimeTracking();
     }
@@ -493,6 +497,7 @@
       this.lastScrollY = window.scrollY;
       this.removeOverlay();
       this.removeFeedCard();
+      document.documentElement.classList.remove("reddit-scroll-limiter-blocked");
       document.body.classList.remove("reddit-scroll-limiter-blocked");
 
       if (this.intersectionObserver) {
@@ -517,6 +522,7 @@
         sessionStartedAt: existing.sessionStartedAt || now,
         lastActivityAt: now,
         snoozedUntil: existing.snoozedUntil || null,
+        postSnoozeAllowance: existing.postSnoozeAllowance || 0,
         snoozesUsed: existing.snoozesUsed || 0
       };
       this.state.lastKnownRoute = {
@@ -553,16 +559,16 @@
         return false;
       }
 
-      const routeName = getRouteRuleName(this.currentRoute);
+      const routeNames = getRouteRuleNames(this.currentRoute);
       const allowlist = new Set(this.settings.subredditAllowlist);
       const blocklist = new Set(this.settings.subredditBlocklist);
 
       if (this.settings.subredditMode === "only_listed") {
-        return allowlist.has(routeName);
+        return routeNames.some((name) => allowlist.has(name));
       }
 
       if (this.settings.subredditMode === "exclude_listed") {
-        return !blocklist.has(routeName);
+        return !routeNames.some((name) => blocklist.has(name));
       }
 
       return true;
@@ -657,8 +663,9 @@
       }
 
       const session = normalizeRouteSession(this.getRouteSession());
-      if (session.snoozedUntil) {
+      if (session.snoozedUntil || session.postSnoozeAllowance) {
         session.snoozedUntil = null;
+        session.postSnoozeAllowance = 0;
         this.state.routes[this.currentRoute.key] = session;
         this.scheduleStateSave();
       }
@@ -700,7 +707,15 @@
 
       const session = normalizeRouteSession(this.getRouteSession());
       session.snoozesUsed += 1;
-      session.snoozedUntil = Date.now() + (this.settings.snoozeMinutes * 60000);
+      this.state.globalLockedUntil = null;
+
+      if (this.settings.limitMode === "posts") {
+        session.postSnoozeAllowance += this.settings.snoozePostCount;
+        session.snoozedUntil = null;
+      } else {
+        session.snoozedUntil = Date.now() + (this.settings.snoozeMinutes * 60000);
+      }
+
       this.state.routes[this.currentRoute.key] = session;
       this.saveCurrentRouteSession();
       this.scheduleStateSave();
@@ -772,14 +787,14 @@
     getTriggeredLimitReason() {
       const mode = this.settings.limitMode;
       const session = normalizeRouteSession(this.getRouteSession());
-      const postTriggered = this.seenPostIds.size >= this.settings.postLimit;
+      const postTriggered = this.seenPostIds.size >= this.getEffectivePostLimit(session);
       const timeTriggered = session.activeSeconds >= this.settings.timeLimitMinutes * 60;
 
-      if ((mode === "posts" || mode === "both") && postTriggered) {
+      if (mode === "posts" && postTriggered) {
         return "postLimit";
       }
 
-      if ((mode === "time" || mode === "both") && timeTriggered) {
+      if (mode === "time" && timeTriggered) {
         return "timeLimit";
       }
 
@@ -811,12 +826,15 @@
       const threshold = this.settings.warningThresholdPercent / 100;
       const mode = this.settings.limitMode;
 
-      if ((mode === "posts" || mode === "both") && this.seenPostIds.size >= Math.ceil(this.settings.postLimit * threshold)) {
-        const count = Math.min(this.seenPostIds.size, this.settings.postLimit);
-        return `You are close to your Reddit limit: ${count} of ${this.settings.postLimit} posts.`;
+      if (mode === "posts") {
+        const effectivePostLimit = this.getEffectivePostLimit(session);
+        if (this.seenPostIds.size >= Math.ceil(effectivePostLimit * threshold)) {
+          const count = Math.min(this.seenPostIds.size, effectivePostLimit);
+          return `You are close to your Reddit limit: ${count} of ${effectivePostLimit} posts.`;
+        }
       }
 
-      if (mode === "time" || mode === "both") {
+      if (mode === "time") {
         const timeLimitSeconds = this.settings.timeLimitMinutes * 60;
         if (session.activeSeconds >= Math.ceil(timeLimitSeconds * threshold)) {
           const remainingMinutes = Math.max(1, Math.ceil((timeLimitSeconds - session.activeSeconds) / 60));
@@ -825,6 +843,11 @@
       }
 
       return "";
+    }
+
+    getEffectivePostLimit(session = this.getRouteSession()) {
+      const normalized = normalizeRouteSession(session);
+      return this.settings.postLimit + normalized.postSnoozeAllowance;
     }
 
     showWarning(text) {
@@ -854,6 +877,13 @@
     handleScroll() {
       const currentScrollY = window.scrollY;
 
+      if (this.isLockSuppressedAboveLimit() && currentScrollY > Math.max(0, this.limitReachedY - RETURN_ZONE_PX)) {
+        this.lockSuppressedAboveLimit = false;
+        this.showBlocker("restored");
+        this.lastScrollY = currentScrollY;
+        return;
+      }
+
       if (this.blocked && this.overlayHiddenByEscape && currentScrollY > this.lastScrollY) {
         this.restoreOverlayAfterEscape();
       }
@@ -866,7 +896,7 @@
     }
 
     handleWheel(event) {
-      if (!this.shouldBlockDownwardMovement(event.deltaY)) {
+      if (!this.shouldBlockMovement(event.deltaY)) {
         return;
       }
 
@@ -880,14 +910,13 @@
     }
 
     handleTouchMove(event) {
-      if (!this.blocked || !event.touches || event.touches.length === 0) {
+      if ((!this.blocked && !this.isLockSuppressedAboveLimit()) || !event.touches || event.touches.length === 0) {
         return;
       }
 
       const currentY = event.touches[0].clientY;
       const fingerMovedUp = currentY < this.touchStartY;
-
-      if (fingerMovedUp) {
+      if (this.blocked || fingerMovedUp) {
         event.preventDefault();
         event.stopPropagation();
         this.restoreOverlayAfterEscape();
@@ -895,14 +924,14 @@
     }
 
     handleKeydown(event) {
-      if (!this.blocked) {
+      if (!this.blocked && !this.isLockSuppressedAboveLimit()) {
         return;
       }
 
-      if (event.key === "Escape") {
-        this.hideOverlayText();
+      if (this.blocked && event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
+        this.restoreOverlayAfterEscape();
         return;
       }
 
@@ -913,8 +942,8 @@
       }
     }
 
-    shouldBlockDownwardMovement(deltaY) {
-      return (this.blocked || this.isLockSuppressedAboveLimit()) && deltaY > 0;
+    shouldBlockMovement(deltaY) {
+      return this.blocked || (this.isLockSuppressedAboveLimit() && deltaY > 0);
     }
 
     showOverlay(reason) {
@@ -950,7 +979,7 @@
 
       const snoozeHelp = document.createElement("p");
       snoozeHelp.className = "reddit-scroll-limiter-snooze-help";
-      snoozeHelp.textContent = `Need a little longer? You can snooze once for ${this.settings.snoozeMinutes} minutes.`;
+      snoozeHelp.textContent = this.getSnoozeHelpText();
       snoozeHelp.hidden = !this.canSnooze();
 
       const actions = document.createElement("div");
@@ -959,28 +988,17 @@
       const returnButton = document.createElement("button");
       returnButton.type = "button";
       returnButton.textContent = "Back to viewed posts";
-      returnButton.addEventListener("click", () => {
-        window.scrollTo({
-          top: Math.max(0, this.limitReachedY - window.innerHeight),
-          behavior: "smooth"
-        });
-      });
+      returnButton.addEventListener("click", () => this.returnToViewedPosts());
 
       actions.append(returnButton);
 
       if (this.canSnooze()) {
         const snoozeButton = document.createElement("button");
         snoozeButton.type = "button";
-        snoozeButton.textContent = `Snooze ${this.settings.snoozeMinutes} minutes`;
+        snoozeButton.textContent = this.getSnoozeButtonText();
         snoozeButton.addEventListener("click", () => this.snooze());
         actions.append(snoozeButton);
       }
-
-      const hideButton = document.createElement("button");
-      hideButton.type = "button";
-      hideButton.textContent = "Hide message";
-      hideButton.addEventListener("click", () => this.hideOverlayText());
-      actions.append(hideButton);
 
       dialog.append(title, message, countdown, snoozeHelp, actions);
       overlay.append(dialog);
@@ -1019,6 +1037,35 @@
       this.feedCardFallbackActive = false;
       this.startFeedCardLifecycle();
       return true;
+    }
+
+    returnToViewedPosts() {
+      const returnOffset = Math.min(Math.max(window.innerHeight * 1.25, 900), 1600);
+      const returnY = Math.max(0, this.limitReachedY - returnOffset);
+      this.clearBlockingUi(true);
+      this.lastScrollY = returnY;
+      requestAnimationFrame(() => {
+        window.scrollTo({
+          top: returnY,
+          behavior: "auto"
+        });
+      });
+    }
+
+    getSnoozeHelpText() {
+      if (this.settings.limitMode === "posts") {
+        return `Need a little longer? You can snooze once for ${this.settings.snoozePostCount} more posts.`;
+      }
+
+      return `Need a little longer? You can snooze once for ${this.settings.snoozeMinutes} minutes.`;
+    }
+
+    getSnoozeButtonText() {
+      if (this.settings.limitMode === "posts") {
+        return `Snooze ${this.settings.snoozePostCount} posts`;
+      }
+
+      return `Snooze ${this.settings.snoozeMinutes} minutes`;
     }
 
     canUseFeedCard(reason) {
@@ -1085,19 +1132,13 @@
       const returnButton = document.createElement("button");
       returnButton.type = "button";
       returnButton.textContent = "Back to viewed posts";
-      returnButton.addEventListener("click", () => {
-        this.removeFeedCard({ clearAnchors: false });
-        window.scrollTo({
-          top: Math.max(0, this.limitReachedY - window.innerHeight),
-          behavior: "smooth"
-        });
-      });
+      returnButton.addEventListener("click", () => this.returnToViewedPosts());
       actions.append(returnButton);
 
       if (this.canSnooze()) {
         const snoozeButton = document.createElement("button");
         snoozeButton.type = "button";
-        snoozeButton.textContent = `Snooze ${this.settings.snoozeMinutes} minutes`;
+        snoozeButton.textContent = this.getSnoozeButtonText();
         snoozeButton.addEventListener("click", () => this.snooze());
         actions.append(snoozeButton);
       }
@@ -1398,7 +1439,7 @@
         return `Reddit scrolling is paused. Come back in ${minutes}.`;
       }
 
-      const displayedCount = Math.min(this.seenPostIds.size, this.settings.postLimit);
+      const displayedCount = Math.min(this.seenPostIds.size, this.getEffectivePostLimit(session));
       return `You have scrolled through ${displayedCount} posts. Come back in ${minutes}.`;
     }
 
@@ -1499,9 +1540,10 @@
       lockoutMinutes: clampNumber(settings.lockoutMinutes, DEFAULT_SETTINGS.lockoutMinutes, 1, 1440),
       snoozeEnabled: settings.snoozeEnabled !== false,
       snoozeMinutes: clampNumber(settings.snoozeMinutes, DEFAULT_SETTINGS.snoozeMinutes, 1, 120),
+      snoozePostCount: clampNumber(settings.snoozePostCount, DEFAULT_SETTINGS.snoozePostCount, 1, 100),
       snoozeLimitPerSession: clampNumber(settings.snoozeLimitPerSession, DEFAULT_SETTINGS.snoozeLimitPerSession, 0, 10),
       showCountdown: settings.showCountdown !== false,
-      limitMode: normalizeOption(settings.limitMode, ["posts", "time", "both"], DEFAULT_SETTINGS.limitMode),
+      limitMode: normalizeOption(settings.limitMode, ["posts", "time"], DEFAULT_SETTINGS.limitMode),
       timeLimitMinutes: clampNumber(settings.timeLimitMinutes, DEFAULT_SETTINGS.timeLimitMinutes, 1, 1440),
       pauseTimerWhenTabHidden: settings.pauseTimerWhenTabHidden !== false,
       subredditMode: normalizeOption(settings.subredditMode, ["all", "only_listed", "exclude_listed"], DEFAULT_SETTINGS.subredditMode),
@@ -1562,6 +1604,7 @@
       lastActiveTickAt: Number(normalized.lastActiveTickAt) || null,
       warningShown: normalized.warningShown === true,
       snoozedUntil: Number(normalized.snoozedUntil) || null,
+      postSnoozeAllowance: Number(normalized.postSnoozeAllowance) || 0,
       snoozesUsed: Number(normalized.snoozesUsed) || 0
     };
   }
@@ -1576,6 +1619,7 @@
       lastActiveTickAt: null,
       warningShown: false,
       snoozedUntil: null,
+      postSnoozeAllowance: 0,
       snoozesUsed: 0
     };
   }
@@ -1583,8 +1627,16 @@
   function getRouteInfo(pathname = window.location.pathname) {
     const path = pathname.replace(/\/+$/, "") || "/";
 
-    if (path === "/" || path === "/home") {
+    if (path === "/" || path === "/home" || path === "/best") {
       return { type: "HOME", countable: true, key: "home", label: "Reddit home" };
+    }
+
+    if (path === "/popular") {
+      return { type: "POPULAR", countable: true, key: "popular", label: "Popular" };
+    }
+
+    if (path === "/all") {
+      return { type: "ALL", countable: true, key: "all", label: "All" };
     }
 
     if (path.includes("/comments/")) {
@@ -1595,7 +1647,7 @@
       return { type: "SEARCH", countable: true, key: "search", label: "Reddit search" };
     }
 
-    const subredditMatch = path.match(/^\/r\/([\w-]+)$/i);
+    const subredditMatch = path.match(/^\/r\/([\w-]+)(?:\/(?:hot|new|top|rising|controversial))?$/i);
     if (subredditMatch) {
       const subreddit = subredditMatch[1].toLowerCase();
       return {
@@ -1614,15 +1666,32 @@
   }
 
   function getRouteRuleName(route) {
-    if (route.key === "home" || route.key === "search") {
-      return route.key;
+    return getRouteRuleNames(route)[0] || route.key;
+  }
+
+  function getRouteRuleNames(route) {
+    if (route.key === "home") {
+      return ["home", "frontpage", "front-page", "front page"];
+    }
+
+    if (route.key === "search") {
+      return ["search"];
+    }
+
+    if (route.key === "popular") {
+      return ["popular"];
+    }
+
+    if (route.key === "all") {
+      return ["all"];
     }
 
     if (route.key.startsWith("subreddit:")) {
-      return route.key.replace("subreddit:", "");
+      const subreddit = route.key.replace("subreddit:", "");
+      return [subreddit];
     }
 
-    return route.key;
+    return [route.key];
   }
 
   function isModernFeedPost(postElement) {

@@ -5,6 +5,7 @@ const DEFAULT_SETTINGS = {
   lockoutMinutes: 30,
   snoozeEnabled: true,
   snoozeMinutes: 5,
+  snoozePostCount: 5,
   snoozeLimitPerSession: 1,
   showCountdown: true,
   limitMode: "posts",
@@ -23,12 +24,15 @@ const DEBOUNCE_MS = 500;
 
 const limitInput = document.getElementById("postLimit");
 const limitSlider = document.getElementById("postLimitSlider");
+const postLimitPanel = document.getElementById("postLimitPanel");
 const valueDisplay = document.getElementById("valueDisplay");
 const enabledInput = document.getElementById("enabled");
 const limitModeSelect = document.getElementById("limitMode");
+const timeLimitField = document.getElementById("timeLimitField");
 const timeLimitSelect = document.getElementById("timeLimitMinutes");
 const lockoutSelect = document.getElementById("lockoutMinutes");
 const resetSelect = document.getElementById("resetAfterMinutes");
+const pauseTimerField = document.getElementById("pauseTimerField");
 const pauseTimerInput = document.getElementById("pauseTimerWhenTabHidden");
 const subredditModeSelect = document.getElementById("subredditMode");
 const subredditListInput = document.getElementById("subredditList");
@@ -36,15 +40,15 @@ const warningEnabledInput = document.getElementById("warningEnabled");
 const warningThresholdSelect = document.getElementById("warningThresholdPercent");
 const snoozeEnabledInput = document.getElementById("snoozeEnabled");
 const snoozeControls = document.getElementById("snoozeControls");
+const snoozePostsField = document.getElementById("snoozePostsField");
+const snoozePostCountSelect = document.getElementById("snoozePostCount");
+const snoozeMinutesField = document.getElementById("snoozeMinutesField");
 const snoozeMinutesSelect = document.getElementById("snoozeMinutes");
 const snoozeLimitSelect = document.getElementById("snoozeLimitPerSession");
-const startBreakButton = document.getElementById("startBreakBtn");
-const disableHourButton = document.getElementById("disableHourBtn");
-const disableSessionButton = document.getElementById("disableSessionBtn");
-const disableFeedButton = document.getElementById("disableFeedBtn");
+const applyButton = document.getElementById("applyBtn");
 const resetButton = document.getElementById("resetBtn");
 const status = document.getElementById("status");
-const routeStatus = document.getElementById("routeStatus");
+const sessionStatusPanel = document.getElementById("sessionStatusPanel");
 const breakStatus = document.getElementById("breakStatus");
 const snoozeStatus = document.getElementById("snoozeStatus");
 
@@ -79,6 +83,7 @@ enabledInput.addEventListener("change", () => {
 });
 
 limitModeSelect.addEventListener("change", () => {
+  updateLimitModeVisibility(limitModeSelect.value);
   saveSyncSetting("limitMode", limitModeSelect.value, `Limit mode saved: ${limitModeSelect.selectedOptions[0].textContent}`);
 });
 
@@ -128,13 +133,18 @@ warningThresholdSelect.addEventListener("change", () => {
 
 snoozeEnabledInput.addEventListener("change", () => {
   const enabled = snoozeEnabledInput.checked;
-  snoozeControls.hidden = !enabled;
+  updateLimitModeVisibility(limitModeSelect.value);
   saveSyncSetting("snoozeEnabled", enabled, enabled ? "Snooze enabled" : "Snooze disabled");
+});
+
+snoozePostCountSelect.addEventListener("change", () => {
+  const value = Number.parseInt(snoozePostCountSelect.value, 10);
+  saveSyncSetting("snoozePostCount", value, `Snooze amount saved: ${value} posts`);
 });
 
 snoozeMinutesSelect.addEventListener("change", () => {
   const value = Number.parseInt(snoozeMinutesSelect.value, 10);
-  saveSyncSetting("snoozeMinutes", value, `Snooze length saved: ${formatDuration(value)}`);
+  saveSyncSetting("snoozeMinutes", value, `Snooze amount saved: ${formatDuration(value)}`);
 });
 
 snoozeLimitSelect.addEventListener("change", () => {
@@ -142,45 +152,12 @@ snoozeLimitSelect.addEventListener("change", () => {
   saveSyncSetting("snoozeLimitPerSession", value, `Snoozes saved: ${value} per session`);
 });
 
-startBreakButton.addEventListener("click", () => {
-  const lockedUntil = Date.now() + (currentSettings.lockoutMinutes * 60000);
-  currentState.globalLockedUntil = lockedUntil;
-  chrome.storage.local.set({ [LOCAL_STATE_KEY]: currentState }, () => {
-    renderReliableStatus();
-    showStatus(`Break active until ${formatTime(lockedUntil)}`);
-  });
-});
-
-disableHourButton.addEventListener("click", () => {
-  currentState.disabledUntil = Date.now() + 60 * 60000;
-  chrome.storage.local.set({ [LOCAL_STATE_KEY]: currentState }, () => {
-    showStatus("Limiter disabled for 1 hour");
-  });
-});
-
-disableSessionButton.addEventListener("click", () => {
-  currentState.disabledUntilSessionReset = true;
-  chrome.storage.local.set({ [LOCAL_STATE_KEY]: currentState }, () => {
-    showStatus("Limiter disabled until next session");
-  });
-});
-
-disableFeedButton.addEventListener("click", () => {
-  const routeKey = currentState.lastKnownRoute?.key;
-  if (!routeKey) {
-    showStatus("Open a Reddit feed first");
-    return;
-  }
-
-  currentState.disabledRouteKeys = Array.from(new Set([...currentState.disabledRouteKeys, routeKey]));
-  chrome.storage.local.set({ [LOCAL_STATE_KEY]: currentState }, () => {
-    showStatus(`Disabled on ${currentState.lastKnownRoute.label} until next session`);
-  });
+applyButton.addEventListener("click", () => {
+  refreshRedditTabs();
 });
 
 resetButton.addEventListener("click", () => {
-  syncLimitControls(DEFAULT_SETTINGS.postLimit);
-  saveSyncSetting("postLimit", DEFAULT_SETTINGS.postLimit, `Saved limit: ${DEFAULT_SETTINGS.postLimit}`);
+  resetCurrentSession();
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -192,6 +169,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     }
     currentSettings = normalizeSettings(currentSettings);
     syncSettingsControls(currentSettings);
+    renderReliableStatus();
   }
 
   if (areaName === "local" && changes[LOCAL_STATE_KEY]) {
@@ -217,6 +195,7 @@ function syncSettingsControls(settings) {
   syncLimitControls(clampLimit(settings.postLimit));
   enabledInput.checked = settings.enabled !== false;
   limitModeSelect.value = settings.limitMode;
+  updateLimitModeVisibility(settings.limitMode);
   timeLimitSelect.value = String(settings.timeLimitMinutes);
   lockoutSelect.value = String(settings.lockoutMinutes);
   resetSelect.value = String(settings.resetAfterMinutes);
@@ -226,7 +205,8 @@ function syncSettingsControls(settings) {
   warningEnabledInput.checked = settings.warningEnabled !== false;
   warningThresholdSelect.value = String(settings.warningThresholdPercent);
   snoozeEnabledInput.checked = settings.snoozeEnabled !== false;
-  snoozeControls.hidden = !snoozeEnabledInput.checked;
+  updateLimitModeVisibility(settings.limitMode);
+  snoozePostCountSelect.value = String(settings.snoozePostCount);
   snoozeMinutesSelect.value = String(settings.snoozeMinutes);
   snoozeLimitSelect.value = String(settings.snoozeLimitPerSession);
 }
@@ -271,15 +251,88 @@ function saveSubredditRules() {
   currentSettings = normalizeSettings({ ...currentSettings, ...updates });
   chrome.storage.sync.set(updates, () => {
     syncSettingsControls(currentSettings);
+    renderReliableStatus();
     showStatus("Feed rules saved");
   });
 }
 
-function renderReliableStatus() {
+function refreshRedditTabs() {
+  const redditUrls = [
+    "https://reddit.com/*",
+    "https://www.reddit.com/*",
+    "https://old.reddit.com/*",
+    "https://new.reddit.com/*",
+    "https://sh.reddit.com/*"
+  ];
+
+  chrome.tabs.query({ url: redditUrls }, (tabs) => {
+    if (chrome.runtime.lastError) {
+      showStatus("Could not refresh Reddit tabs");
+      return;
+    }
+
+    if (!tabs.length) {
+      showStatus("No open Reddit tabs to refresh");
+      return;
+    }
+
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.tabs.reload(tab.id);
+      }
+    }
+
+    showStatus(`Refreshed ${tabs.length} Reddit ${tabs.length === 1 ? "tab" : "tabs"}`);
+  });
+}
+
+function resetCurrentSession() {
   cleanupExpiredState();
 
-  const routeLabel = currentState.lastKnownRoute?.label || "Reddit";
-  routeStatus.textContent = `Limiter active on ${routeLabel}`;
+  const now = Date.now();
+  const routeKey = currentState.lastKnownRoute?.key;
+  currentState.globalLockedUntil = null;
+
+  if (routeKey) {
+    currentState.routes[routeKey] = createRouteSession(now);
+    currentState.disabledRouteKeys = currentState.disabledRouteKeys.filter((key) => key !== routeKey);
+  } else {
+    currentState.routes = {};
+    currentState.disabledRouteKeys = [];
+  }
+
+  chrome.storage.local.set({ [LOCAL_STATE_KEY]: currentState }, () => {
+    renderReliableStatus();
+    showStatus(routeKey ? "Current feed session reset" : "All sessions reset");
+  });
+}
+
+function createRouteSession(now) {
+  return {
+    seenPostIds: [],
+    viewedPostCount: 0,
+    sessionStartedAt: now,
+    lastActivityAt: now,
+    activeSeconds: 0,
+    lastActiveTickAt: null,
+    warningShown: false,
+    snoozedUntil: null,
+    postSnoozeAllowance: 0,
+    snoozesUsed: 0
+  };
+}
+
+function updateLimitModeVisibility(mode) {
+  postLimitPanel.hidden = mode === "time";
+  timeLimitField.hidden = mode === "posts";
+  pauseTimerField.hidden = mode === "posts";
+  snoozeControls.hidden = !snoozeEnabledInput.checked;
+  snoozePostsField.hidden = mode !== "posts" || !snoozeEnabledInput.checked;
+  snoozeMinutesField.hidden = mode !== "time" || !snoozeEnabledInput.checked;
+}
+
+function renderReliableStatus() {
+  cleanupExpiredState();
 
   if (currentState.globalLockedUntil && currentState.globalLockedUntil > Date.now()) {
     breakStatus.hidden = false;
@@ -303,6 +356,8 @@ function renderReliableStatus() {
     snoozeStatus.hidden = true;
     snoozeStatus.textContent = "";
   }
+
+  sessionStatusPanel.hidden = breakStatus.hidden && snoozeStatus.hidden;
 }
 
 function cleanupExpiredState() {
@@ -358,9 +413,10 @@ function normalizeSettings(settings) {
     lockoutMinutes: clampNumber(settings.lockoutMinutes, DEFAULT_SETTINGS.lockoutMinutes, 1, 1440),
     snoozeEnabled: settings.snoozeEnabled !== false,
     snoozeMinutes: clampNumber(settings.snoozeMinutes, DEFAULT_SETTINGS.snoozeMinutes, 1, 120),
+    snoozePostCount: clampNumber(settings.snoozePostCount, DEFAULT_SETTINGS.snoozePostCount, 1, 100),
     snoozeLimitPerSession: clampNumber(settings.snoozeLimitPerSession, DEFAULT_SETTINGS.snoozeLimitPerSession, 0, 10),
     showCountdown: settings.showCountdown !== false,
-    limitMode: normalizeOption(settings.limitMode, ["posts", "time", "both"], DEFAULT_SETTINGS.limitMode),
+    limitMode: normalizeOption(settings.limitMode, ["posts", "time"], DEFAULT_SETTINGS.limitMode),
     timeLimitMinutes: clampNumber(settings.timeLimitMinutes, DEFAULT_SETTINGS.timeLimitMinutes, 1, 1440),
     pauseTimerWhenTabHidden: settings.pauseTimerWhenTabHidden !== false,
     subredditMode: normalizeOption(settings.subredditMode, ["all", "only_listed", "exclude_listed"], DEFAULT_SETTINGS.subredditMode),

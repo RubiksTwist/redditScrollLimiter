@@ -115,6 +115,7 @@ async function configureStorageAndTestPopup(extensionId, postLimit) {
       lockoutMinutes: 30,
       snoozeEnabled: true,
       snoozeMinutes: 5,
+      snoozePostCount: 5,
       snoozeLimitPerSession: 1,
       showCountdown: true,
       limitMode: "posts",
@@ -127,6 +128,13 @@ async function configureStorageAndTestPopup(extensionId, postLimit) {
       warningThresholdPercent: 80
     }, resolve);
   })`);
+  await sleep(700);
+  await page.send("Page.reload", { ignoreCache: true });
+  try {
+    await page.waitFor("Page.loadEventFired", 10000);
+  } catch {
+    await sleep(1000);
+  }
   await sleep(700);
 
   const result = await page.evaluate(`(() => ({
@@ -186,6 +194,7 @@ async function setExtensionStorage(extensionId, postLimit) {
       lockoutMinutes: 30,
       snoozeEnabled: true,
       snoozeMinutes: 5,
+      snoozePostCount: 5,
       snoozeLimitPerSession: 1,
       showCountdown: true,
       limitMode: "posts",
@@ -210,6 +219,7 @@ async function setExtensionStorage(extensionId, postLimit) {
       lockoutMinutes: 30,
       snoozeEnabled: true,
       snoozeMinutes: 5,
+      snoozePostCount: 5,
       snoozeLimitPerSession: 1,
       showCountdown: true,
       limitMode: "posts",
@@ -229,6 +239,7 @@ async function setExtensionStorage(extensionId, postLimit) {
       "lockoutMinutes",
       "resetAfterMinutes",
       "snoozeEnabled",
+      "snoozePostCount",
       "limitMode",
       "timeLimitMinutes",
       "pauseTimerWhenTabHidden",
@@ -243,6 +254,7 @@ async function setExtensionStorage(extensionId, postLimit) {
   assert(stored.lockoutMinutes === 30, "Storage setup failed: expected lockoutMinutes 30.");
   assert(stored.resetAfterMinutes === 30, "Storage setup failed: expected resetAfterMinutes 30.");
   assert(stored.snoozeEnabled === true, "Storage setup failed: expected snoozeEnabled true.");
+  assert(stored.snoozePostCount === 5, "Storage setup failed: expected snoozePostCount 5.");
   assert(stored.limitMode === "posts", "Storage setup failed: expected limitMode posts.");
   assert(stored.timeLimitMinutes === 30, "Storage setup failed: expected timeLimitMinutes 30.");
   assert(stored.pauseTimerWhenTabHidden === true, "Storage setup failed: expected pauseTimerWhenTabHidden true.");
@@ -291,6 +303,8 @@ async function runModernRedditLiveTest(url, postLimit) {
 
   const activation = await scrollLiveFeedUntilBlocked(page, "modern", postLimit);
   if (!activation.ok) {
+    const screenshot = path.join(ARTIFACTS_DIR, "live-reddit-blocker-ui.png");
+    await captureScreenshot(page, screenshot);
     page.close();
     throw new Error(`Modern Reddit found real posts but blocker did not activate: ${activation.reason}`);
   }

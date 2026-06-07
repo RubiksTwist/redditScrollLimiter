@@ -9,82 +9,140 @@
 <body>
   <main class="popup-shell">
     <header class="popup-header">
-      <div class="brand-mark" aria-hidden="true">R</div>
+      <img class="brand-mark" src="../images/icon-source.png" alt="" aria-hidden="true">
       <div>
         <h1>Reddit Scroll Limiter</h1>
       </div>
     </header>
 
-    <section class="status-panel" aria-labelledby="status-heading">
-      <h2 id="status-heading">Status</h2>
-      <p id="routeStatus">Limiter active on Reddit</p>
+    <section class="status-panel" id="sessionStatusPanel" aria-labelledby="status-heading" hidden>
+      <h2 id="status-heading">Session status</h2>
       <p id="breakStatus" hidden></p>
       <p id="snoozeStatus" hidden></p>
-    </section>
-
-    <section class="setting-panel" aria-labelledby="limit-heading">
-      <div class="setting-row">
-        <label id="limit-heading" for="postLimit">Post limit</label>
-        <output id="valueDisplay" for="postLimit postLimitSlider">100</output>
-      </div>
-
-      <div class="limit-controls">
-        <input type="number" id="postLimit" min="1" max="500" value="100" inputmode="numeric">
-        <input type="range" id="postLimitSlider" min="1" max="500" value="100">
-      </div>
-
-      <p class="hint">The blocker appears after this many posts have been at least halfway visible.</p>
     </section>
 
     <section class="setting-panel" aria-labelledby="break-heading">
       <h2 id="break-heading">Break settings</h2>
 
-      <label class="field">
+      <label class="field" id="limitModeField">
         <span>Limit by</span>
         <select id="limitMode">
           <option value="posts">Posts</option>
           <option value="time">Time</option>
-          <option value="both">Posts or time</option>
         </select>
       </label>
 
-      <label class="field">
+      <div class="field limit-field" id="postLimitPanel">
+        <div class="setting-row">
+          <label id="limit-heading" for="postLimit">Post limit</label>
+          <output id="valueDisplay" for="postLimit postLimitSlider">100</output>
+        </div>
+
+        <div class="limit-controls">
+          <input type="number" id="postLimit" min="1" max="500" value="100" inputmode="numeric">
+          <input type="range" id="postLimitSlider" min="1" max="500" value="100">
+        </div>
+
+        <p class="hint">The blocker appears after this many posts have been at least halfway visible.</p>
+      </div>
+
+      <label class="field" id="timeLimitField" hidden>
         <span>Time limit</span>
         <select id="timeLimitMinutes">
+          <option value="1">1 minute</option>
+          <option value="2">2 minutes</option>
+          <option value="3">3 minutes</option>
+          <option value="5">5 minutes</option>
           <option value="10">10 minutes</option>
           <option value="15">15 minutes</option>
-          <option value="30">30 minutes</option>
+          <option value="20">20 minutes</option>
+          <option value="25">25 minutes</option>
+          <option value="30" selected>30 minutes</option>
           <option value="45">45 minutes</option>
           <option value="60">1 hour</option>
+          <option value="90">1.5 hours</option>
+          <option value="120">2 hours</option>
         </select>
       </label>
 
       <label class="field">
         <span>Break length</span>
         <select id="lockoutMinutes">
+          <option value="1">1 minute</option>
+          <option value="2">2 minutes</option>
+          <option value="3">3 minutes</option>
           <option value="5">5 minutes</option>
+          <option value="10">10 minutes</option>
           <option value="15">15 minutes</option>
-          <option value="30">30 minutes</option>
+          <option value="20">20 minutes</option>
+          <option value="30" selected>30 minutes</option>
+          <option value="45">45 minutes</option>
           <option value="60">1 hour</option>
+          <option value="90">1.5 hours</option>
+          <option value="120">2 hours</option>
         </select>
       </label>
 
       <label class="field">
         <span>Reset session after</span>
         <select id="resetAfterMinutes">
+          <option value="5">5 minutes</option>
           <option value="10">10 minutes</option>
           <option value="15">15 minutes</option>
-          <option value="30">30 minutes</option>
+          <option value="20">20 minutes</option>
+          <option value="30" selected>30 minutes</option>
+          <option value="45">45 minutes</option>
           <option value="60">1 hour</option>
+          <option value="90">1.5 hours</option>
           <option value="120">2 hours</option>
+          <option value="240">4 hours</option>
           <option value="0">Never</option>
         </select>
       </label>
 
-      <label class="toggle secondary-toggle">
+      <label class="toggle secondary-toggle" id="pauseTimerField" hidden>
         <input type="checkbox" id="pauseTimerWhenTabHidden" checked>
         <span>Pause timer when tab is hidden</span>
       </label>
+
+      <label class="toggle secondary-toggle">
+        <input type="checkbox" id="snoozeEnabled" checked>
+        <span>Allow snooze</span>
+      </label>
+
+      <div id="snoozeControls" class="snooze-controls">
+        <label class="field" id="snoozePostsField">
+          <span>Snooze amount</span>
+          <select id="snoozePostCount">
+            <option value="3">3 posts</option>
+            <option value="5" selected>5 posts</option>
+            <option value="10">10 posts</option>
+          </select>
+        </label>
+
+        <label class="field" id="snoozeMinutesField" hidden>
+          <span>Snooze amount</span>
+          <select id="snoozeMinutes">
+            <option value="1">1 minute</option>
+            <option value="2">2 minutes</option>
+            <option value="3">3 minutes</option>
+            <option value="5" selected>5 minutes</option>
+            <option value="10">10 minutes</option>
+            <option value="15">15 minutes</option>
+            <option value="20">20 minutes</option>
+            <option value="30">30 minutes</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Snoozes per session</span>
+          <select id="snoozeLimitPerSession">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
+        </label>
+      </div>
     </section>
 
     <section class="setting-panel" aria-labelledby="subreddit-heading">
@@ -125,35 +183,6 @@
       </label>
     </section>
 
-    <section class="setting-panel" aria-labelledby="snooze-heading">
-      <h2 id="snooze-heading">Snooze</h2>
-
-      <label class="toggle">
-        <input type="checkbox" id="snoozeEnabled" checked>
-        <span>Allow snooze</span>
-      </label>
-
-      <div id="snoozeControls" class="snooze-controls">
-        <label class="field">
-          <span>Snooze length</span>
-          <select id="snoozeMinutes">
-            <option value="5">5 minutes</option>
-            <option value="10">10 minutes</option>
-            <option value="15">15 minutes</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Snoozes per session</span>
-          <select id="snoozeLimitPerSession">
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-          </select>
-        </label>
-      </div>
-    </section>
-
     <section class="setting-panel compact">
       <label class="toggle">
         <input type="checkbox" id="enabled" checked>
@@ -161,11 +190,8 @@
       </label>
     </section>
 
-    <button id="startBreakBtn" type="button" class="primary-button">Start break now</button>
-    <button id="disableHourBtn" type="button">Disable for 1 hour</button>
-    <button id="disableSessionBtn" type="button">Disable until next session</button>
-    <button id="disableFeedBtn" type="button">Disable this feed until next session</button>
-    <button id="resetBtn" type="button">Reset to 100</button>
+    <button id="applyBtn" type="button">Apply and refresh Reddit tabs</button>
+    <button id="resetBtn" type="button">Reset session</button>
 
     <p class="install-note">Refresh open Reddit tabs after installing or updating.</p>
     <div id="status" class="status" role="status" aria-live="polite"></div>
