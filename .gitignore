@@ -1,4 +1,25 @@
-artifacts/
-dist/
+# Dependencies
 node_modules/
+
+# Generated release package
+dist/
+
+# Test and browser automation output
+artifacts/
+.playwright-mcp/
 *.log
+
+# Local archives and extension signing material
+*.zip
+*.crx
+*.pem
+
+# Temporary files
+tmp/
+temp/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
